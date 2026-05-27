@@ -1,0 +1,2 @@
+audio_file,sentence_count,sample_rate,duration_seconds
+data/sample.wav,3,48000,2.5
