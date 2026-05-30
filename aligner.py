@@ -1,13 +1,17 @@
 from pathlib import Path
 import librosa
 import numpy as np
+import pympi
 
 
 # File Paths
 
 AUDIO_PATH = Path("data/sample.wav")
+ELAN_PATH = Path("data/sample.eaf")
 
 OUTPUT_DIR = Path("outputs")
+
+TIER_NAME = "Surrogate_Transcription-txt-gbe"
 
 
 # Function:     load_audio
@@ -18,20 +22,30 @@ OUTPUT_DIR = Path("outputs")
 # Description:  Loads an audio file using librosa.
 
 def load_audio(audio_path):
-    y, sr = librosa.load(audio_path, sr=None) # Get y and sr from the file
-    d = librosa.get_duration(y=y, sr=sr) # Get d from the file
+    # Load the audio file with its original sampling rate
+    y, sr = librosa.load(audio_path, sr=None)
 
+    # Get the duration of the audio file in seconds
+    d = librosa.get_duration(y=y, sr=sr)
+
+    # Return the waveform, sampling rate, and duration
     return y, sr, d
 
 
 # Function:     load_elan
 # Inputs:       elan_path | file path of ELAN file to be loaded (Path)
-# Outputs:      eaf | loaded ELAN file object
-# Description:  Loads an ELAN .eaf file so that its annotation tiers can be read or modified.
+# Outputs:      eaf | loaded ELAN file object (Eaf)
+# Description:  Loads an ELAN .eaf file so that its annotation tiers can be read/modified.
 
 def load_elan(elan_path):
-    return # eaf
+    # Convert Path to string so pympi can read it
+    elan_path = str(elan_path)
 
+    # Load the ELAN file
+    eaf = pympi.Elan.Eaf(elan_path)
+
+    # Return the loaded ELAN object
+    return eaf
 
 
 # Function:     extract_audio_segment
@@ -43,8 +57,17 @@ def load_elan(elan_path):
 # Description:  Extracts a smaller audio segment from the full audio file using start and end times.
 
 def extract_audio_segment(y, sr, start_time, end_time):
-    return # y_segment
+    # Convert start time from seconds to a sample index
+    start_sample = int(start_time * sr)
 
+    # Convert end time from seconds to a sample index
+    end_sample = int(end_time * sr)
+
+    # Slice the waveform to keep only the selected segment
+    y_segment = y[start_sample:end_sample]
+
+    # Return the extracted audio segment
+    return y_segment
 
 
 # Function:     get_elan_segments
@@ -54,7 +77,27 @@ def extract_audio_segment(y, sr, start_time, end_time):
 # Description:  Extracts start times, end times, and annotation values from a given ELAN tier.
 
 def get_elan_segments(eaf, tier_name):
-    return # segments
+    # Get all annotations from the specified ELAN tier
+    annotations = eaf.get_annotation_data_for_tier(tier_name)
+
+    # Create an empty list to store the cleaned segment data
+    segments = []
+
+    # Loop through each annotation in the tier
+    for start_time, end_time, label in annotations:
+
+        # Store each annotation as a dictionary
+        segment = {
+            "start": start_time / 1000,
+            "end": end_time / 1000,
+            "label": label
+        }
+
+        # Add the segment to the list
+        segments.append(segment)
+
+    # Return the list of extracted segments
+    return segments
 
 
 
@@ -259,11 +302,71 @@ def run_pipeline(config):
 # Description:  Main project pipeline.
 
 def main():
-    print("=== SURROGATE LANGUAGE ALIGNER ===\n")
+    print("=== Basic Input Functions Test ===\n")
 
-    print("\r  Loading audio and sentences...", end="")
-    
+    # Make sure the outputs folder exists
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    # Load the audio file
+    print("\rLoading audio...", end="")
     y, sr, d = load_audio(AUDIO_PATH)
+
+    # Print basic audio information
+    print("\rAudio loaded successfully:")
+    print(f"  - Audio path: {AUDIO_PATH}")
+    print(f"  - Sample rate: {sr} Hz")
+    print(f"  - Duration: {d:.2f} seconds")
+    print()
+
+    # Load the ELAN file
+    print("\rLoading ELAN file...", end="")
+    eaf = load_elan(ELAN_PATH)
+
+    # Print basic ELAN information
+    print("\rELAN file loaded successfully:")
+    print(f"  - ELAN path: {ELAN_PATH}")
+    print()
+
+    # Get segments from one ELAN tier
+    print("\rGetting ELAN segments...", end="")
+    segments = get_elan_segments(eaf, TIER_NAME)
+
+    # Print how many segments were found
+    print(f"\rFound {len(segments)} segments in tier: {TIER_NAME}")
+
+    # Print the first few segments for checking
+    print("\nFirst few segments:")
+    for segment in segments[:5]:
+        print(f"  - {segment}")
+    print()
+
+    # Choose a test segment from the ELAN file
+    if len(segments) > 0:
+
+        # Use the first segment as a test
+        start_time = segments[0]["start"]
+        end_time = segments[0]["end"]
+
+        # Extract that part of the audio
+        print("\rExtracting first audio segment...", end="")
+        y_segment = extract_audio_segment(y, sr, start_time, end_time)
+
+        # Get segment duration
+        segment_duration = librosa.get_duration(y=y_segment, sr=sr)
+
+        # Print segment info
+        print("\rAudio segment extracted successfully:")
+        print(f"  - Start time: {start_time:.2f} seconds")
+        print(f"  - End time: {end_time:.2f} seconds")
+        print(f"  - Segment duration: {segment_duration:.2f} seconds")
+        print(f"  - Segment samples: {len(y_segment)}")
+
+    else:
+
+        # Tell the user if there were no annotations
+        print("No segments found, so no audio segment was extracted.")
+
+    print("\nTesting complete.")
 
 
 if __name__ == "__main__":
