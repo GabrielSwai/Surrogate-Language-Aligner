@@ -100,7 +100,6 @@ def get_elan_segments(eaf, tier_name):
     return segments
 
 
-
 # Function:     detect_note_onsets
 # Inputs:       y_segment | extracted audio segment (NumPy array)
 #               sr | sampling rate of the audio segment (int)
@@ -108,8 +107,17 @@ def get_elan_segments(eaf, tier_name):
 # Description:  Detects the approximate start times of individual surrogate notes in the audio segment.
 
 def detect_note_onsets(y_segment, sr):
-    return # onset_times
+    # Detect onset frames in the audio segment
+    onset_frames = librosa.onset.onset_detect(y=y_segment, sr=sr)
 
+    # Convert onset frames into times in seconds
+    onset_times = librosa.frames_to_time(onset_frames, sr=sr)
+
+    # Convert NumPy array to a regular Python list
+    onset_times = onset_times.tolist()
+
+    # Return the detected onset times
+    return onset_times
 
 
 # Function:     make_note_intervals
@@ -120,8 +128,38 @@ def detect_note_onsets(y_segment, sr):
 # Description:  Converts note onset times into note intervals with start and end times.
 
 def make_note_intervals(onset_times, segment_start, segment_end):
-    return # intervals
+    # Initialize an empty list to store note intervals
+    intervals = []
 
+    # Convert relative onset times to absolute times
+    absolute_onsets = [segment_start + onset for onset in onset_times]
+
+    # If no onsets were detected, return an empty list
+    if len(absolute_onsets) == 0:
+        return intervals
+
+    # Loop through each detected onset
+    for i in range(len(absolute_onsets)):
+
+        # The note starts at the current onset
+        start = absolute_onsets[i]
+
+        # The note ends at the next onset, unless this is the last note
+        if i < len(absolute_onsets) - 1:
+            end = absolute_onsets[i + 1]
+
+        # The final note ends at the end of the full segment
+        else:
+            end = segment_end
+
+        # Store the note interval
+        intervals.append({
+            "start": start,
+            "end": end
+        })
+
+    # Return the list of note intervals
+    return intervals
 
 
 # Function:     extract_pitch
@@ -129,11 +167,46 @@ def make_note_intervals(onset_times, segment_start, segment_end):
 #               sr | sampling rate of the audio segment (int)
 #               intervals | start and end times for each detected note (list)
 # Outputs:      pitch_features | pitch-related feature values for each note interval (list)
-# Description:  Extracts acoustic pitch features from each detected note interval.
+# Description:  Extracts acoustic pitch features from each detected note interval using spectral centroid.
 
 def extract_pitch(y_segment, sr, intervals):
-    return # pitch_features
+    # Create an empty list to store pitch features
+    pitch_features = []
 
+    # Loop through each note interval
+    for interval in intervals:
+
+        # Convert absolute start time to a time relative to the segment
+        relative_start = interval["start"] - intervals[0]["start"]
+
+        # Convert absolute end time to a time relative to the segment
+        relative_end = interval["end"] - intervals[0]["start"]
+
+        # Convert start time from seconds to samples
+        start_sample = int(relative_start * sr)
+
+        # Convert end time from seconds to samples
+        end_sample = int(relative_end * sr)
+
+        # Extract just this note from the segment
+        y_note = y_segment[start_sample:end_sample]
+
+        # Skip empty intervals
+        if len(y_note) == 0:
+            pitch_features.append(0)
+            continue
+
+        # Compute the spectral centroid for the note
+        centroid = librosa.feature.spectral_centroid(y=y_note, sr=sr)
+
+        # Average the centroid across the note
+        avg_centroid = float(centroid.mean())
+
+        # Store the pitch feature
+        pitch_features.append(avg_centroid)
+
+    # Return one pitch feature for each note
+    return pitch_features
 
 
 # Function:     classify_pitches
@@ -142,8 +215,29 @@ def extract_pitch(y_segment, sr, intervals):
 # Description:  Classifies each note as high or low based on its extracted pitch feature.
 
 def classify_pitches(pitch_features):
-    return # surrogate_tones
+    # Initialize an empty list to store H/L labels
+    surrogate_tones = []
 
+    # If there are no pitch features, return an empty list
+    if len(pitch_features) == 0:
+        return surrogate_tones
+
+    # Use the median pitch feature as the H/L cutoff
+    threshold = np.median(pitch_features)
+
+    # Loop through each pitch feature
+    for feature in pitch_features:
+
+        # Label notes above the threshold as high
+        if feature >= threshold:
+            surrogate_tones.append("H")
+
+        # Label notes below the threshold as low
+        else:
+            surrogate_tones.append("L")
+
+    # Return the classified H/L labels
+    return surrogate_tones
 
 
 # Function:     parse_tones
@@ -155,7 +249,6 @@ def parse_tones(tone_string):
     return # tones
 
 
-
 # Function:     tokenize_phrase
 # Inputs:       phrase | Kinande phrase to be tokenized (str)
 # Outputs:      words | word tokens from the phrase (list)
@@ -163,7 +256,6 @@ def parse_tones(tone_string):
 
 def tokenize_phrase(phrase):
     return # words
-
 
 
 # Function:     validate_melodies
@@ -176,7 +268,6 @@ def validate_melodies(words, tones):
     return # is_valid
 
 
-
 # Function:     make_word_sequence
 # Inputs:       words | word tokens from the Kinande phrase (list)
 #               tones | word-level tone patterns for the Kinande phrase (list)
@@ -185,7 +276,6 @@ def validate_melodies(words, tones):
 
 def make_word_sequence(words, tones):
     return # word_sequence
-
 
 
 # Function:     make_surrogate_sequence
@@ -198,7 +288,6 @@ def make_surrogate_sequence(intervals, surrogate_tones):
     return # surrogate_sequence
 
 
-
 # Function:     group_tones_by_word
 # Inputs:       word_sequence | structured word and tone pattern data (list)
 #               surrogate_sequence | structured surrogate note data (list)
@@ -207,7 +296,6 @@ def make_surrogate_sequence(intervals, surrogate_tones):
 
 def group_tones_by_word(word_sequence, surrogate_sequence):
     return # grouped_sequence
-
 
 
 # Function:     score_alignment
@@ -220,7 +308,6 @@ def score_alignment(spoken_tone, surrogate_tone):
     return # score
 
 
-
 # Function:     align_sequences
 # Inputs:       spoken_sequence | structured Kinande word/tone sequence (list)
 #               surrogate_sequence | structured surrogate note sequence (list)
@@ -229,7 +316,6 @@ def score_alignment(spoken_tone, surrogate_tone):
 
 def align_sequences(spoken_sequence, surrogate_sequence):
     return # alignment
-
 
 
 # Function:     calculate_confidence
@@ -241,7 +327,6 @@ def calculate_confidence(alignment):
     return # confidence
 
 
-
 # Function:     create_textgrid
 # Inputs:       alignment | alignment between Kinande words and surrogate notes (list)
 #               output_path | file path where TextGrid should be saved (Path)
@@ -250,7 +335,6 @@ def calculate_confidence(alignment):
 
 def create_textgrid(alignment, output_path):
     return None
-
 
 
 # Function:     add_alignment
@@ -264,7 +348,6 @@ def add_alignment(eaf, alignment, tier_name):
     return eaf
 
 
-
 # Function:     save_elan
 # Inputs:       eaf | modified ELAN file object
 #               output_path | file path where modified ELAN file should be saved (Path)
@@ -275,7 +358,6 @@ def save_elan(eaf, output_path):
     return None
 
 
-
 # Function:     flag_mismatches
 # Inputs:       alignment | alignment between Kinande words and surrogate notes (list)
 # Outputs:      flagged_alignment | alignment with mismatches marked (list)
@@ -283,7 +365,6 @@ def save_elan(eaf, output_path):
 
 def flag_mismatches(alignment):
     return # flagged_alignment
-
 
 
 # Function:     run_pipeline
@@ -365,6 +446,49 @@ def main():
 
         # Tell the user if there were no annotations
         print("No segments found, so no audio segment was extracted.")
+
+    print()
+
+    # Detect note onsets in the extracted segment
+    print("\rDetecting note onsets...", end="")
+    onset_times = detect_note_onsets(y_segment, sr)
+
+    # Print detected onset information
+    print("\rNote onsets detected successfully:")
+    print(f"  - Number of onsets: {len(onset_times)}")
+    print(f"  - First few onsets: {onset_times[:10]}")
+    print()
+
+    # Convert note onsets into note intervals
+    print("\rMaking note intervals...", end="")
+    intervals = make_note_intervals(onset_times, start_time, end_time)
+
+    # Print interval information
+    print("\rNote intervals created successfully:")
+    print(f"  - Number of intervals: {len(intervals)}")
+    print(f"  - First few intervals:")
+    for interval in intervals[:10]:
+        print(f"    - {interval}")
+    print()
+
+    # Extract pitch features for each note interval
+    print("\rExtracting pitch features...", end="")
+    pitch_features = extract_pitch(y_segment, sr, intervals)
+
+    # Print pitch feature information
+    print("\rPitch features extracted successfully:")
+    print(f"  - Number of pitch features: {len(pitch_features)}")
+    print(f"  - First few pitch features: {pitch_features[:10]}")
+    print()
+
+    # Classify each pitch feature as H or L
+    print("\rClassifying pitches...", end="")
+    surrogate_tones = classify_pitches(pitch_features)
+
+    # Print classified H/L tone information
+    print("\rPitches classified successfully:")
+    print(f"  - Number of surrogate tones: {len(surrogate_tones)}")
+    print(f"  - First few surrogate tones: {surrogate_tones[:20]}")
 
     print("\nTesting complete.")
 
