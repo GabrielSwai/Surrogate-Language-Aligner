@@ -477,12 +477,56 @@ def classify_pitches(pitch_features, shape_features):
 
 
 # Function:     parse_tones
-# Inputs:       tone_string | word-level tone patterns separated by spaces (str)
+# Inputs:       tone_string | spoken phrase (str)
 # Outputs:      tones | parsed word-level tone patterns (list)
-# Description:  Converts a tone string like "L-H L-L" into a list of tone patterns.
+# Description:  Converts a phrase like "Tukándisyá tasáta kwȇ?" into a list of tone patterns like ["L-H-L-H", "L-H-L", "HL"].
 
 def parse_tones(tone_string):
-    return # tones
+    # Vowels with high tone
+    h_vowels = ["á", "é", "í", "ó", "ú", "Á", "É", "Í", "Ó", "Ú"]
+
+    # Vowels with low tone
+    l_vowels = ["a", "e", "i", "o", "u", "A", "E", "I", "O", "U"]
+
+    # Vowels with falling tone
+    f_vowels = ["â", "ê", "î", "ô", "û", "ȃ", "ȇ", "ȋ", "ȏ", "ȗ",
+                "Â", "Ê", "Î", "Ô", "Û", "Ȃ", "Ȇ", "Ȋ", "Ȏ", "Ȗ"]
+
+    # Create an empty list for word-level tone patterns
+    tones = []
+
+    # Split the phrase into words
+    words = tone_string.split()
+
+    # Loop through each word
+    for word in words:
+
+        # Create an empty list for this word's tones
+        word_tones = []
+
+        # Loop through each character in the word
+        for char in word:
+
+            # Check for high-toned vowels
+            if char in h_vowels:
+                word_tones.append("H")
+
+            # Check for low-toned vowels
+            elif char in l_vowels:
+                word_tones.append("L")
+
+            # Check for falling-toned vowels
+            elif char in f_vowels:
+                word_tones.append("HL")
+
+        # Join this word's tones with hyphens
+        tone_pattern = "-".join(word_tones)
+
+        # Add this word's tone pattern to the list
+        tones.append(tone_pattern)
+
+    # Return one tone pattern per word
+    return tones
 
 
 # Function:     tokenize_phrase
@@ -491,7 +535,11 @@ def parse_tones(tone_string):
 # Description:  Splits a Kinande phrase into word tokens using spaces.
 
 def tokenize_phrase(phrase):
-    return # words
+    # Split the phrase into words using spaces
+    words = phrase.split()
+
+    # Return the list of word tokens
+    return words
 
 
 # Function:     validate_melodies
@@ -501,7 +549,17 @@ def tokenize_phrase(phrase):
 # Description:  Checks that every word has exactly one corresponding tone pattern.
 
 def validate_melodies(words, tones):
-    return # is_valid
+    # Check whether the number of words matches the number of tone patterns
+    is_valid = len(words) == len(tones)
+
+    # If the counts do not match, print a helpful message
+    if not is_valid:
+        print("Word/tone mismatch:")
+        print(f"  - Number of words: {len(words)}")
+        print(f"  - Number of tone patterns: {len(tones)}")
+
+    # Return whether the melodies are valid
+    return is_valid
 
 
 # Function:     make_word_sequence
@@ -511,7 +569,28 @@ def validate_melodies(words, tones):
 # Description:  Combines Kinande words and their tone patterns into a structured sequence.
 
 def make_word_sequence(words, tones):
-    return # word_sequence
+    # Create an empty list to store word objects
+    word_sequence = []
+
+    # Loop through each word and its matching tone pattern
+    for i, (word, tone_pattern) in enumerate(zip(words, tones)):
+
+        # Split the word-level tone pattern into individual tones
+        tone_list = tone_pattern.split("-")
+
+        # Store the word and its tone information together
+        word_data = {
+            "index": i,
+            "word": word,
+            "tone_pattern": tone_pattern,
+            "tones": tone_list
+        }
+
+        # Add this word object to the sequence
+        word_sequence.append(word_data)
+
+    # Return the structured word sequence
+    return word_sequence
 
 
 # Function:     make_surrogate_sequence
@@ -521,7 +600,25 @@ def make_word_sequence(words, tones):
 # Description:  Combines note intervals and H/L tone labels into a structured surrogate sequence.
 
 def make_surrogate_sequence(intervals, surrogate_tones):
-    return # surrogate_sequence
+    # Create an empty list to store surrogate note objects
+    surrogate_sequence = []
+
+    # Loop through each interval and its matching surrogate tone
+    for i, (interval, tone) in enumerate(zip(intervals, surrogate_tones)):
+
+        # Store the note interval and tone together
+        note_data = {
+            "index": i,
+            "start": interval["start"],
+            "end": interval["end"],
+            "tone": tone
+        }
+
+        # Add this note object to the surrogate sequence
+        surrogate_sequence.append(note_data)
+
+    # Return the structured surrogate sequence
+    return surrogate_sequence
 
 
 # Function:     group_tones_by_word
@@ -531,7 +628,58 @@ def make_surrogate_sequence(intervals, surrogate_tones):
 # Description:  Groups individual surrogate notes into word-sized chunks based on each word's tone pattern length.
 
 def group_tones_by_word(word_sequence, surrogate_sequence):
-    return # grouped_sequence
+    # Create an empty list to store grouped word-level alignments
+    grouped_sequence = []
+
+    # Keep track of where we are in the surrogate note sequence
+    surrogate_index = 0
+
+    # Loop through each Kinande word
+    for word_data in word_sequence:
+
+        # Get the tones for this word
+        word_tones = word_data["tones"]
+
+        # Count how many surrogate notes this word should use
+        tone_count = len(word_tones)
+
+        # Get the matching chunk of surrogate notes
+        surrogate_chunk = surrogate_sequence[surrogate_index:surrogate_index + tone_count]
+
+        # Move the surrogate index forward
+        surrogate_index += tone_count
+
+        # Get the surrogate tones from this chunk
+        surrogate_tones = [note["tone"] for note in surrogate_chunk]
+
+        # If there are notes in the chunk, use their start and end times
+        if len(surrogate_chunk) > 0:
+            start = surrogate_chunk[0]["start"]
+            end = surrogate_chunk[-1]["end"]
+
+        # If there are no notes, leave times empty
+        else:
+            start = None
+            end = None
+
+        # Store the word and its grouped surrogate notes
+        grouped_data = {
+            "index": word_data["index"],
+            "word": word_data["word"],
+            "spoken_tone_pattern": word_data["tone_pattern"],
+            "spoken_tones": word_tones,
+            "surrogate_tone_pattern": "-".join(surrogate_tones),
+            "surrogate_tones": surrogate_tones,
+            "surrogate_notes": surrogate_chunk,
+            "start": start,
+            "end": end
+        }
+
+        # Add this grouped word object to the output
+        grouped_sequence.append(grouped_data)
+
+    # Return the grouped word-level sequence
+    return grouped_sequence
 
 
 # Function:     score_alignment
@@ -746,6 +894,62 @@ def main():
         if correct_tones[i] == surrogate_tones[i]:
             correct += 1
     print(f"\nAccuracy: {correct/len(correct_tones):.2f}")
+    print()
+
+    # Test phrase tokenization and tone parsing
+    print("\rTesting phrase and tone parsing...", end="")
+
+    # Use a small test phrase with tone markings
+    test_phrase = "Asá hano"
+
+    # Split the phrase into word tokens
+    words = tokenize_phrase(test_phrase)
+
+    # Parse the tone pattern from the phrase
+    tones = parse_tones(test_phrase)
+
+    # Check that each word has one tone pattern
+    is_valid = validate_melodies(words, tones)
+
+    # Print parsing results
+    print("\rPhrase and tone parsing tested successfully:")
+    print(f"  - Phrase: {test_phrase}")
+    print(f"  - Words: {words}")
+    print(f"  - Tones: {tones}")
+    print(f"  - Valid: {is_valid}")
+    print()
+
+    # Make the structured Kinande word sequence
+    print("\rMaking word sequence...", end="")
+    word_sequence = make_word_sequence(words, tones)
+
+    # Print word sequence
+    print("\rWord sequence created successfully:")
+    for word_data in word_sequence:
+        print(f"  - {word_data}")
+    print()
+
+    # Make the structured surrogate note sequence
+    print("\rMaking surrogate sequence...", end="")
+    surrogate_sequence = make_surrogate_sequence(intervals, surrogate_tones)
+
+    # Print surrogate sequence
+    print("\rSurrogate sequence created successfully:")
+    print(f"  - Number of surrogate notes: {len(surrogate_sequence)}")
+    print(f"  - Surrogate notes:")
+    for note_data in surrogate_sequence:
+        print(f"    - {note_data}")
+    print()
+
+    # Group surrogate tones by Kinande word
+    print("\rGrouping surrogate tones by word...", end="")
+    grouped_sequence = group_tones_by_word(word_sequence, surrogate_sequence)
+
+    # Print grouped sequence
+    print("\rGrouped sequence created successfully:")
+    for group in grouped_sequence:
+        print(f"  - {group}")
+    print()
 
     print("\nTesting complete.")
 
