@@ -2,12 +2,13 @@ from pathlib import Path
 import librosa
 import numpy as np
 import pympi
+import parselmouth
 
 
-# File Paths
+# Constants
 
-AUDIO_PATH = Path("data/sample.wav")
-ELAN_PATH = Path("data/sample.eaf")
+AUDIO_PATH = Path(f"data/sample.wav")
+ELAN_PATH = Path(f"data/sample.eaf")
 
 OUTPUT_DIR = Path("outputs")
 
@@ -108,7 +109,18 @@ def get_elan_segments(eaf, tier_name):
 
 def detect_note_onsets(y_segment, sr):
     # Detect onset frames in the audio segment
-    onset_frames = librosa.onset.onset_detect(y=y_segment, sr=sr)
+    onset_frames = librosa.onset.onset_detect(
+        y=y_segment,
+        sr=sr,
+        units="frames",
+        backtrack=True,
+        pre_max=10,
+        post_max=10,
+        pre_avg=20,
+        post_avg=20,
+        delta=0.2,
+        wait=8
+    )
 
     # Convert onset frames into times in seconds
     onset_times = librosa.frames_to_time(onset_frames, sr=sr)
@@ -166,77 +178,301 @@ def make_note_intervals(onset_times, segment_start, segment_end):
 # Inputs:       y_segment | extracted audio segment (NumPy array)
 #               sr | sampling rate of the audio segment (int)
 #               intervals | start and end times for each detected note (list)
+#               low_min | 
 # Outputs:      pitch_features | pitch-related feature values for each note interval (list)
-# Description:  Extracts acoustic pitch features from each detected note interval using spectral centroid.
+# Description:  Extracts acoustic pitch features from each detected note interval using magnitude spectrum.
 
-def extract_pitch(y_segment, sr, intervals):
-    # Create an empty list to store pitch features
+def extract_pitch(y_segment, sr, intervals, segment_start):
+    # Create an empty list to store one pitch value per note
     pitch_features = []
+
+    # Convert NumPy audio into a Parselmouth Sound object
+    sound = parselmouth.Sound(y_segment, sampling_frequency=sr)
+
+    # Run Praat's pitch tracker
+    pitch = sound.to_pitch_ac(
+        time_step=None,
+        pitch_floor=50,
+        max_number_of_candidates=15,
+        very_accurate=False,
+        silence_threshold=0.02,
+        voicing_threshold=0.1,
+        octave_cost=0.15,
+        octave_jump_cost=0.5,
+        voiced_unvoiced_cost=0.14,
+        pitch_ceiling=800
+    )
 
     # Loop through each note interval
     for interval in intervals:
 
-        # Convert absolute start time to a time relative to the segment
-        relative_start = interval["start"] - intervals[0]["start"]
+        # Convert absolute times to segment-relative times
+        relative_start = interval["start"] - segment_start
+        relative_end = interval["end"] - segment_start
 
-        # Convert absolute end time to a time relative to the segment
-        relative_end = interval["end"] - intervals[0]["start"]
+        # Get note duration
+        note_duration = relative_end - relative_start
 
-        # Convert start time from seconds to samples
-        start_sample = int(relative_start * sr)
+        # Skip the noisy attack
+        analysis_start = relative_start + 0.3 * note_duration
 
-        # Convert end time from seconds to samples
-        end_sample = int(relative_end * sr)
+        # Avoid the very end of the decay
+        analysis_end = relative_start + 0.60 * note_duration
 
-        # Extract just this note from the segment
-        y_note = y_segment[start_sample:end_sample]
+        # Get pitch values inside this note interval
+        times = pitch.xs()
+        values = pitch.selected_array["frequency"]
 
-        # Skip empty intervals
-        if len(y_note) == 0:
+        # Keep only pitch values inside this note
+        mask = (times >= analysis_start) & (times <= analysis_end)
+
+        # Remove unvoiced frames, which Praat marks as 0
+        note_pitches = values[mask]
+        note_pitches = note_pitches[note_pitches > 0]
+
+        # If no pitch was detected, store 0
+        if len(note_pitches) == 0:
             pitch_features.append(0)
             continue
 
-        # Compute the spectral centroid for the note
-        centroid = librosa.feature.spectral_centroid(y=y_note, sr=sr)
+        # Use the median pitch for stability
+        note_pitch = float(np.median(note_pitches))
 
-        # Average the centroid across the note
-        avg_centroid = float(centroid.mean())
+        # Store one pitch value for this note
+        pitch_features.append(note_pitch)
 
-        # Store the pitch feature
-        pitch_features.append(avg_centroid)
-
-    # Return one pitch feature for each note
+    # Return one pitch value per note interval
     return pitch_features
+
+
+# Function:     extract_shape
+# Inputs:       y_segment | extracted audio segment (NumPy array)
+#               sr | sampling rate of the audio segment (int)
+#               intervals | start and end times for each detected note (list)
+#               segment_start | start time of the full segment in seconds (float)
+# Outputs:      shape_features | shortness/decay score for each detected note (list)
+# Description:  Extracts note-shape features based on how quickly each strike decays.
+
+def extract_shape(
+    y_segment,
+    sr,
+    intervals,
+    segment_start,
+    shape_window_seconds=0.1,
+    frame_ms=8,
+    hop_ms=2,
+    threshold_ratio=0.52,
+    max_tail_time=0.25
+):
+
+    # Create an empty list to store shape scores
+    shape_features = []
+
+    # Convert frame size from milliseconds to samples
+    frame_length = max(1, int((frame_ms / 1000) * sr))
+
+    # Convert hop size from milliseconds to samples
+    hop_length = max(1, int((hop_ms / 1000) * sr))
+
+    # Loop through each note interval
+    for interval in intervals:
+
+        # Convert absolute start time to segment-relative time
+        relative_start = interval["start"] - segment_start
+
+        # Convert start time to samples
+        start_sample = int(relative_start * sr)
+
+        # Use a fixed window after onset
+        end_sample = min(
+            start_sample + int(shape_window_seconds * sr),
+            len(y_segment)
+        )
+
+        # Extract note window
+        y_note = y_segment[start_sample:end_sample]
+
+        # Skip empty notes
+        if len(y_note) == 0:
+            shape_features.append(0)
+            continue
+
+        # Compute RMS envelope
+        rms = librosa.feature.rms(
+            y=y_note,
+            frame_length=frame_length,
+            hop_length=hop_length
+        )[0]
+
+        # Skip empty RMS
+        if len(rms) == 0:
+            shape_features.append(0)
+            continue
+
+        # Get peak RMS
+        peak = np.max(rms)
+
+        # Avoid division by zero
+        if peak == 0:
+            shape_features.append(0)
+            continue
+
+        # Normalize RMS by peak
+        rms = rms / peak
+
+        # Search for peak only near the beginning
+        peak_search_frames = max(1, int(0.05 / (hop_ms / 1000)))
+
+        # Prevent search window from exceeding RMS length
+        peak_search_frames = min(peak_search_frames, len(rms))
+
+        # Find peak index in early part
+        peak_index = int(np.argmax(rms[:peak_search_frames]))
+
+        # Keep decay after peak
+        decay = rms[peak_index:]
+
+        # Skip empty decay
+        if len(decay) == 0:
+            shape_features.append(0)
+            continue
+
+        # Find frames still above threshold
+        active = np.where(decay >= threshold_ratio)[0]
+
+        # If no active frames, tail time is zero
+        if len(active) == 0:
+            tail_time = 0
+
+        # Otherwise get last active frame time
+        else:
+            tail_time = (active[-1] * hop_length) / sr
+
+        # Convert tail time to H-like shortness score
+        tail_shortness = 1.0 - (tail_time / max_tail_time)
+
+        # Clamp to 0-1
+        tail_shortness = max(0, min(tail_shortness, 1))
+
+        # Define early region after peak
+        early_end = min(len(decay), max(2, int(0.05 / (hop_ms / 1000))))
+
+        # Define late region after early region
+        late_start = min(len(decay), max(2, int(0.10 / (hop_ms / 1000))))
+
+        # Compute early energy
+        early_energy = np.mean(decay[:early_end])
+
+        # Compute late energy
+        if late_start >= len(decay):
+            late_energy = 0
+        else:
+            late_energy = np.mean(decay[late_start:])
+
+        # Lower tail energy is more H-like
+        tail_energy_ratio = late_energy / (early_energy + 1e-9)
+
+        # Convert to shortness score
+        energy_shortness = 1.0 - tail_energy_ratio
+
+        # Clamp to 0-1
+        energy_shortness = max(0, min(energy_shortness, 1))
+
+        # Estimate decay slope on log RMS
+        x = np.arange(len(decay))
+
+        # Avoid log(0)
+        y = np.log(decay + 1e-6)
+
+        # Fit a simple line to log-decay
+        if len(x) >= 2:
+            slope = np.polyfit(x, y, 1)[0]
+        else:
+            slope = 0
+
+        # More negative slope means faster decay
+        slope_shortness = min(1, max(0, -slope * 10))
+
+        # Combine cues into one shape score
+        shape_score = (
+            0.45 * tail_shortness
+            + 0.35 * energy_shortness
+            + 0.20 * slope_shortness
+        )
+
+        # Store shape score
+        shape_features.append(float(shape_score))
+
+    # Return one shape score per note
+    return shape_features
 
 
 # Function:     classify_pitches
 # Inputs:       pitch_features | pitch-related feature values for each note interval (list)
 # Outputs:      surrogate_tones | H/L tone labels for each detected note (list)
-# Description:  Classifies each note as high or low based on its extracted pitch feature.
+# Description:  Classifies each note as high or low based on its extracted pitch feature and strike shape.
 
-def classify_pitches(pitch_features):
-    # Initialize an empty list to store H/L labels
-    surrogate_tones = []
+def classify_pitches(pitch_features, shape_features):
 
     # If there are no pitch features, return an empty list
     if len(pitch_features) == 0:
-        return surrogate_tones
+        return []
 
-    # Use the median pitch feature as the H/L cutoff
-    threshold = np.median(pitch_features)
+    # If no shape features were given, use zeros
+    if shape_features is None:
+        shape_features = [0] * len(pitch_features)
 
-    # Loop through each pitch feature
-    for feature in pitch_features:
+    # Make sure both lists match
+    if len(pitch_features) != len(shape_features):
+        raise ValueError("pitch_features and shape_features must have the same length.")
 
-        # Label notes above the threshold as high
-        if feature >= threshold:
-            surrogate_tones.append("H")
+    # Convert pitches to NumPy array
+    pitches = np.array(pitch_features, dtype=float)
 
-        # Label notes below the threshold as low
+    # Convert shape features to NumPy array
+    shapes = np.array(shape_features, dtype=float)
+
+    # Normalize shape features
+    if np.max(shapes) == np.min(shapes):
+        shape_norm = np.zeros_like(shapes)
+    else:
+        shape_norm = (shapes - np.min(shapes)) / (np.max(shapes) - np.min(shapes))
+
+    # Keep only valid pitch values
+    valid_pitches = pitches[pitches > 0]
+
+    # If no valid pitches exist, classify by shape only
+    if len(valid_pitches) == 0:
+        boundary = np.median(shape_norm)
+        return ["H" if s >= boundary else "L" for s in shape_norm]
+
+    # Initialize centers
+    pitch_boundary = 120.0
+
+    # Create empty list for labels
+    surrogate_tones = []
+
+    # Classify each note
+    for pitch, shape in zip(pitches, shape_norm):
+        # If pitch exists, classify using pitch only
+        if pitch > 0:
+            # Compare pitch directly to boundary
+            if pitch >= pitch_boundary:
+                surrogate_tones.append("H")
+            else:
+                surrogate_tones.append("L")
+
+        # If pitch failed, assume H, but let shape override if it is strongly L-like
         else:
-            surrogate_tones.append("L")
+            # Very low shortness means long/ringy tail, so mark as L
+            if shape <= 0.4:
+                surrogate_tones.append("L")
 
-    # Return the classified H/L labels
+            # Otherwise default to H
+            else:
+                surrogate_tones.append("H")
+
+    # Return H/L labels
     return surrogate_tones
 
 
@@ -473,7 +709,7 @@ def main():
 
     # Extract pitch features for each note interval
     print("\rExtracting pitch features...", end="")
-    pitch_features = extract_pitch(y_segment, sr, intervals)
+    pitch_features = extract_pitch(y_segment, sr, intervals, start_time)
 
     # Print pitch feature information
     print("\rPitch features extracted successfully:")
@@ -481,14 +717,35 @@ def main():
     print(f"  - First few pitch features: {pitch_features[:10]}")
     print()
 
+    # Extract shape features for each note interval
+    print("\rExtracting shape features...", end="")
+    shape_features = extract_shape(y_segment, sr, intervals, start_time)
+
     # Classify each pitch feature as H or L
     print("\rClassifying pitches...", end="")
-    surrogate_tones = classify_pitches(pitch_features)
+    surrogate_tones = classify_pitches(pitch_features, shape_features)
 
     # Print classified H/L tone information
     print("\rPitches classified successfully:")
     print(f"  - Number of surrogate tones: {len(surrogate_tones)}")
     print(f"  - First few surrogate tones: {surrogate_tones[:20]}")
+
+    # Print features with labels
+    for feature, tone in zip(pitch_features, surrogate_tones):
+        print(f"{feature:.3f} -> {tone}")
+    
+    # Print accuracy
+    if AUDIO_PATH == Path(f"data/sample.wav"):
+        correct_tones = ['L', 'L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L']
+    elif AUDIO_PATH == Path(f"data/sample2.wav"):
+        correct_tones = ['L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L', 'H', 'H', 'H', 'H', 'H']
+    print(f"\nCorrect surrogate tones: {correct_tones}")
+    print(f"\nOutput:                  {surrogate_tones}")
+    correct = 0
+    for i in range(len(correct_tones)):
+        if correct_tones[i] == surrogate_tones[i]:
+            correct += 1
+    print(f"\nAccuracy: {correct/len(correct_tones):.2f}")
 
     print("\nTesting complete.")
 
