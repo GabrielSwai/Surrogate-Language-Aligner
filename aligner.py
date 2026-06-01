@@ -7,7 +7,7 @@ import parselmouth
 
 # Constants
 
-SAMPLE = "3"
+SAMPLE = "2"
 AUDIO_PATH = Path(f"data/sample{SAMPLE}.wav")
 INPUT_TIER = "Surrogate_Transcription-txt-gbe"
 ELAN_INPUT_PATH = Path(f"data/sample{SAMPLE}.eaf")
@@ -627,67 +627,6 @@ def make_surrogate_sequence(intervals, surrogate_tones):
     return surrogate_sequence
 
 
-# Function:     group_tones_by_word
-# Inputs:       word_sequence | structured word and tone pattern data (list)
-#               surrogate_sequence | structured surrogate note data (list)
-# Outputs:      grouped_sequence | surrogate notes grouped by corresponding Kinande word (list)
-# Description:  Groups individual surrogate notes into word-sized chunks based on each word's tone pattern length.
-
-def group_tones_by_word(word_sequence, surrogate_sequence):
-    # Create an empty list to store grouped word-level alignments
-    grouped_sequence = []
-
-    # Keep track of where we are in the surrogate note sequence
-    surrogate_index = 0
-
-    # Loop through each Kinande word
-    for word_data in word_sequence:
-
-        # Get the tones for this word
-        word_tones = word_data["tones"]
-
-        # Count how many surrogate notes this word should use
-        tone_count = len(word_tones)
-
-        # Get the matching chunk of surrogate notes
-        surrogate_chunk = surrogate_sequence[surrogate_index:surrogate_index + tone_count]
-
-        # Move the surrogate index forward
-        surrogate_index += tone_count
-
-        # Get the surrogate tones from this chunk
-        surrogate_tones = [note["tone"] for note in surrogate_chunk]
-
-        # If there are notes in the chunk, use their start and end times
-        if len(surrogate_chunk) > 0:
-            start = surrogate_chunk[0]["start"]
-            end = surrogate_chunk[-1]["end"]
-
-        # If there are no notes, leave times empty
-        else:
-            start = None
-            end = None
-
-        # Store the word and its grouped surrogate notes
-        grouped_data = {
-            "index": word_data["index"],
-            "word": word_data["word"],
-            "spoken_tone_pattern": word_data["tone_pattern"],
-            "spoken_tones": word_tones,
-            "surrogate_tone_pattern": "-".join(surrogate_tones),
-            "surrogate_tones": surrogate_tones,
-            "surrogate_notes": surrogate_chunk,
-            "start": start,
-            "end": end
-        }
-
-        # Add this grouped word object to the output
-        grouped_sequence.append(grouped_data)
-
-    # Return the grouped word-level sequence
-    return grouped_sequence
-
-
 # Function:     score_alignment
 # Inputs:       spoken_tone | tone from the Kinande word sequence (str)
 #               surrogate_tone | tone from the surrogate note sequence (str)
@@ -943,6 +882,88 @@ def calculate_confidence(alignment):
     return confidence
 
 
+# Function:     group_alignment
+# Inputs:       alignment | alignment between Kinande words and surrogate notes (list)
+# Outputs:      grouped_alignment | alignment between Kinande words and surrogate notes group by word (list)
+# Description:  Groups aligned Kinande words and surrogate notes by word.
+
+def group_alignment(alignment):
+    # Create an empty list for word-level grouped alignment
+    grouped_alignment = []
+
+    # Keep track of the current word group
+    current_group = None
+
+    # Loop through each tone-level alignment item
+    for item in alignment:
+
+        # Skip items with no spoken word
+        if item["spoken"] is None:
+            continue
+
+        # Get the word index for this tone
+        word_index = item["spoken"]["word_index"]
+
+        # Start a new group when we see a new word
+        if current_group is None or current_group["word_index"] != word_index:
+
+            # Save the old group before starting a new one
+            if current_group is not None:
+                grouped_alignment.append(current_group)
+
+            # Create a new word-level group
+            current_group = {
+                "word_index": word_index,
+                "word": item["spoken"]["word"],
+                "spoken_tones": [],
+                "surrogate_tones": [],
+                "start": None,
+                "end": None,
+                "items": []
+            }
+
+        # Add this tone-level item to the current group
+        current_group["items"].append(item)
+
+        # Add spoken tone if it exists
+        if item["spoken_tone"] is not None:
+            current_group["spoken_tones"].append(item["spoken_tone"])
+
+        # Add surrogate tone if it exists
+        if item["surrogate_tone"] is not None:
+            current_group["surrogate_tones"].append(item["surrogate_tone"])
+
+        # Update start time if this item has timing
+        if item["start"] is not None:
+            if current_group["start"] is None:
+                current_group["start"] = item["start"]
+            else:
+                current_group["start"] = min(current_group["start"], item["start"])
+
+        # Update end time if this item has timing
+        if item["end"] is not None:
+            if current_group["end"] is None:
+                current_group["end"] = item["end"]
+            else:
+                current_group["end"] = max(current_group["end"], item["end"])
+
+    # Add the final group
+    if current_group is not None:
+        grouped_alignment.append(current_group)
+
+    # Add joined tone-pattern strings
+    for group in grouped_alignment:
+
+        # Join spoken tones into one word-level pattern
+        group["spoken_tone_pattern"] = "-".join(group["spoken_tones"])
+
+        # Join surrogate tones into one word-level pattern
+        group["surrogate_tone_pattern"] = "-".join(group["surrogate_tones"])
+
+    # Return word-level grouped alignment
+    return grouped_alignment
+
+
 # Function:     add_alignment
 # Inputs:       eaf | loaded ELAN file object
 #               alignment | alignment between Kinande words and surrogate notes (list)
@@ -951,53 +972,46 @@ def calculate_confidence(alignment):
 # Description:  Adds the generated word-to-surrogate alignment to a specified ELAN tier.
 
 def add_alignment(eaf, alignment, tier_names):
-    # Get the existing tier names from the input dictionary
+    # Group tone-level alignment into word-level alignment
+    grouped_alignment = group_alignment(alignment)
+
+    # Get existing tier names
     word_tier = tier_names["words"]
     spoken_tone_tier = tier_names["spoken_tones"]
     surrogate_tone_tier = tier_names["surrogate_tones"]
 
-    # Loop through each aligned item
-    for item in alignment:
-        print("\rITEM: ", item)
+    # Loop through each word-level group
+    for group in grouped_alignment:
 
-        # Skip items with no time interval
-        if item["start"] is None or item["end"] is None:
+        # Skip groups with no timing
+        if group["start"] is None or group["end"] is None:
             continue
 
         # Convert start time from seconds to milliseconds
-        start_ms = int(item["start"] * 1000)
+        start_ms = int(group["start"] * 1000)
 
         # Convert end time from seconds to milliseconds
-        end_ms = int(item["end"] * 1000)
+        end_ms = int(group["end"] * 1000)
 
-        # Get the spoken word if available
-        if item["spoken"] is not None:
-            word = item["spoken"]["word"]
-        else:
-            word = ""
+        # Get word text
+        word = group["word"]
 
-        # Get the spoken tone if available
-        if item["spoken_tone"] is not None:
-            spoken_tone = item["spoken_tone"]
-        else:
-            spoken_tone = ""
+        # Get grouped spoken tone pattern
+        spoken_tone_pattern = group["spoken_tone_pattern"]
 
-        # Get the surrogate tone if available
-        if item["surrogate_tone"] is not None:
-            surrogate_tone = item["surrogate_tone"]
-        else:
-            surrogate_tone = ""
+        # Get grouped surrogate tone pattern
+        surrogate_tone_pattern = group["surrogate_tone_pattern"]
 
-        # Add the word to the existing word tier
+        # Add word annotation
         eaf.add_annotation(word_tier, start_ms, end_ms, word)
 
-        # Add the spoken tone to the existing spoken-tone tier
-        eaf.add_annotation(spoken_tone_tier, start_ms, end_ms, spoken_tone)
+        # Add spoken tone annotation
+        eaf.add_annotation(spoken_tone_tier, start_ms, end_ms, spoken_tone_pattern)
 
-        # Add the surrogate tone to the existing surrogate-tone tier
-        eaf.add_annotation(surrogate_tone_tier, start_ms, end_ms, surrogate_tone)
+        # Add surrogate tone annotation
+        eaf.add_annotation(surrogate_tone_tier, start_ms, end_ms, surrogate_tone_pattern)
 
-    # Return the modified ELAN object
+    # Return modified ELAN object
     return eaf
 
 
@@ -1259,16 +1273,6 @@ def main():
     print(f"  - Surrogate notes:")
     for note_data in surrogate_sequence:
         print(f"    - {note_data}")
-    print()
-
-    # Group surrogate tones by Kinande word
-    print("\rGrouping surrogate tones by word...", end="")
-    grouped_sequence = group_tones_by_word(word_sequence, surrogate_sequence)
-
-    # Print grouped sequence
-    print("\rGrouped sequence created successfully:")
-    for group in grouped_sequence:
-        print(f"  - {group}")
     print()
 
     # Test sequence alignment

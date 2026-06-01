@@ -1,4 +1,6 @@
 *.code-workspace
 .venv/
 *.bak
+*.eaf.001
+*.pfsx
 .DS_Store
