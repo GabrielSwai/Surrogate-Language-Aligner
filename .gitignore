@@ -1,2 +1,4 @@
 *.code-workspace
 .venv/
+*.bak
+.DS_Store

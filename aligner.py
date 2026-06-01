@@ -7,12 +7,18 @@ import parselmouth
 
 # Constants
 
-AUDIO_PATH = Path(f"data/sample2.wav")
-ELAN_PATH = Path(f"data/sample2.eaf")
+SAMPLE = "3"
+AUDIO_PATH = Path(f"data/sample{SAMPLE}.wav")
+INPUT_TIER = "Surrogate_Transcription-txt-gbe"
+ELAN_INPUT_PATH = Path(f"data/sample{SAMPLE}.eaf")
 
 OUTPUT_DIR = Path("outputs")
-
-TIER_NAME = "Surrogate_Transcription-txt-gbe"
+OUTPUT_TIERS = {
+    "words": "Surrogate_Words-txt-gbe",
+    "spoken_tones": "Surrogate_Words-tones",
+    "surrogate_tones": "Surrogate_Words-music"
+}
+ELAN_OUTPUT_PATH = OUTPUT_DIR / "aligned_output.eaf"
 
 
 # Function:     load_audio
@@ -712,7 +718,6 @@ def score_alignment(spoken_tone, surrogate_tone):
 # Description:  Aligns the Kinande tone sequence with the surrogate tone sequence using a scoring algorithm.
 
 def align_sequences(spoken_sequence, surrogate_sequence):
-
     # Flatten the spoken word sequence into individual tone objects
     spoken_tones = []
     for word_data in spoken_sequence:
@@ -892,27 +897,107 @@ def align_sequences(spoken_sequence, surrogate_sequence):
 # Description:  Calculates an overall confidence score based on matches, mismatches, and gaps.
 
 def calculate_confidence(alignment):
-    return # confidence
+    # If there is no alignment, return 0 confidence
+    if len(alignment) == 0:
+        return 0.0
 
+    # Initialize exact match count
+    matches = 0
 
-# Function:     create_textgrid
-# Inputs:       alignment | alignment between Kinande words and surrogate notes (list)
-#               output_path | file path where TextGrid should be saved (Path)
-# Outputs:      None
-# Description:  Creates a Praat TextGrid containing the aligned words, tones, and surrogate note intervals.
+    # Initialize mismatch count
+    mismatches = 0
 
-def create_textgrid(alignment, output_path):
-    return None
+    # Initialize gap count
+    gaps = 0
+
+    # Loop through each aligned item
+    for item in alignment:
+
+        # Get the spoken and surrogate tones
+        spoken_tone = item["spoken_tone"]
+        surrogate_tone = item["surrogate_tone"]
+
+        # Count gaps
+        if spoken_tone is None or surrogate_tone is None:
+            gaps += 1
+
+        # Count exact matches
+        elif spoken_tone == surrogate_tone:
+            matches += 1
+
+        # Count mismatches
+        else:
+            mismatches += 1
+
+    # Count total aligned items
+    total = matches + mismatches + gaps
+
+    # Avoid division by zero
+    if total == 0:
+        return 0.0
+
+    # Calculate confidence as the proportion of exact matches
+    confidence = matches / total
+
+    # Return the confidence score
+    return confidence
 
 
 # Function:     add_alignment
 # Inputs:       eaf | loaded ELAN file object
 #               alignment | alignment between Kinande words and surrogate notes (list)
-#               tier_name | name of ELAN tier where alignment should be added (str)
+#               tier_names | name of ELAN tiers where alignment should be added (dict)
 # Outputs:      eaf | modified ELAN file object
 # Description:  Adds the generated word-to-surrogate alignment to a specified ELAN tier.
 
-def add_alignment(eaf, alignment, tier_name):
+def add_alignment(eaf, alignment, tier_names):
+    # Get the existing tier names from the input dictionary
+    word_tier = tier_names["words"]
+    spoken_tone_tier = tier_names["spoken_tones"]
+    surrogate_tone_tier = tier_names["surrogate_tones"]
+
+    # Loop through each aligned item
+    for item in alignment:
+        print("\rITEM: ", item)
+
+        # Skip items with no time interval
+        if item["start"] is None or item["end"] is None:
+            continue
+
+        # Convert start time from seconds to milliseconds
+        start_ms = int(item["start"] * 1000)
+
+        # Convert end time from seconds to milliseconds
+        end_ms = int(item["end"] * 1000)
+
+        # Get the spoken word if available
+        if item["spoken"] is not None:
+            word = item["spoken"]["word"]
+        else:
+            word = ""
+
+        # Get the spoken tone if available
+        if item["spoken_tone"] is not None:
+            spoken_tone = item["spoken_tone"]
+        else:
+            spoken_tone = ""
+
+        # Get the surrogate tone if available
+        if item["surrogate_tone"] is not None:
+            surrogate_tone = item["surrogate_tone"]
+        else:
+            surrogate_tone = ""
+
+        # Add the word to the existing word tier
+        eaf.add_annotation(word_tier, start_ms, end_ms, word)
+
+        # Add the spoken tone to the existing spoken-tone tier
+        eaf.add_annotation(spoken_tone_tier, start_ms, end_ms, spoken_tone)
+
+        # Add the surrogate tone to the existing surrogate-tone tier
+        eaf.add_annotation(surrogate_tone_tier, start_ms, end_ms, surrogate_tone)
+
+    # Return the modified ELAN object
     return eaf
 
 
@@ -923,6 +1008,16 @@ def add_alignment(eaf, alignment, tier_name):
 # Description:  Saves the modified ELAN file to disk.
 
 def save_elan(eaf, output_path):
+    # Make sure output path is a Path object to avoid an exception
+    output_path = Path(output_path)
+
+    # Make sure the output folder exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save the modified ELAN file
+    eaf.to_file(str(output_path))
+
+    # Return nothing
     return None
 
 
@@ -932,7 +1027,41 @@ def save_elan(eaf, output_path):
 # Description:  Marks places where the Kinande tone pattern and surrogate tone pattern do not match cleanly.
 
 def flag_mismatches(alignment):
-    return # flagged_alignment
+    # Create an empty list to store flagged alignment items
+    flagged_alignment = []
+
+    # Loop through each item in the alignment
+    for item in alignment:
+
+        # Make a copy so we do not modify the original item directly
+        flagged_item = item.copy()
+
+        # Get the spoken tone
+        spoken_tone = item["spoken_tone"]
+
+        # Get the surrogate tone
+        surrogate_tone = item["surrogate_tone"]
+
+        # If either item is missing, mark it as a gap
+        if spoken_tone is None or surrogate_tone is None:
+            flagged_item["match_status"] = "gap"
+            flagged_item["is_match"] = False
+
+        # If the tones match exactly, mark it as a match
+        elif spoken_tone == surrogate_tone:
+            flagged_item["match_status"] = "match"
+            flagged_item["is_match"] = True
+
+        # Otherwise, mark it as a mismatch
+        else:
+            flagged_item["match_status"] = "mismatch"
+            flagged_item["is_match"] = False
+
+        # Add the flagged item to the output list
+        flagged_alignment.append(flagged_item)
+
+    # Return the flagged alignment
+    return flagged_alignment
 
 
 # Function:     run_pipeline
@@ -969,19 +1098,19 @@ def main():
 
     # Load the ELAN file
     print("\rLoading ELAN file...", end="")
-    eaf = load_elan(ELAN_PATH)
+    eaf = load_elan(ELAN_INPUT_PATH)
 
     # Print basic ELAN information
     print("\rELAN file loaded successfully:")
-    print(f"  - ELAN path: {ELAN_PATH}")
+    print(f"  - ELAN path: {ELAN_INPUT_PATH}")
     print()
 
     # Get segments from one ELAN tier
     print("\rGetting ELAN segments...", end="")
-    segments = get_elan_segments(eaf, TIER_NAME)
+    segments = get_elan_segments(eaf, INPUT_TIER)
 
     # Print how many segments were found
-    print(f"\rFound {len(segments)} segments in tier: {TIER_NAME}")
+    print(f"\rFound {len(segments)} segments in tier: {INPUT_TIER}")
 
     # Print the first few segments for checking
     print("\nFirst few segments:")
@@ -1067,10 +1196,12 @@ def main():
         print(f"{feature:.3f} -> {tone}")
     
     # Print accuracy
-    if AUDIO_PATH == Path(f"data/sample.wav"):
+    if SAMPLE == "1":
         correct_tones = ['L', 'L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L']
-    elif AUDIO_PATH == Path(f"data/sample2.wav"):
+    if SAMPLE == "2":
         correct_tones = ['L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L', 'H', 'H', 'H', 'H', 'H']
+    if SAMPLE == "3":
+        correct_tones = ['L', 'L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L']
     print(f"\nCorrect surrogate tones: {correct_tones}")
     print(f"\nOutput:                  {surrogate_tones}")
     correct = 0
@@ -1084,10 +1215,12 @@ def main():
     print("\rTesting phrase and tone parsing...", end="")
 
     # Use a small test phrase with tone markings
-    if AUDIO_PATH == Path(f"data/sample.wav"):
+    if SAMPLE == "1":
         test_phrase = "Lebay’ ebitú, yikátak’ eriwȃ"
-    if AUDIO_PATH == Path(f"data/sample2.wav"):
+    if SAMPLE == "2":
         test_phrase = "Ehinyunyú hinámuhuluka okómítí koko kitwá kiryȃ"
+    if SAMPLE == "3":
+        test_phrase = "Lebay’ ebitú, yikátak’ eriwȃ"
 
     # Split the phrase into word tokens
     words = tokenize_phrase(test_phrase)
@@ -1152,6 +1285,50 @@ def main():
         except TypeError:
             print(f"    - {item["spoken"]["word"]}: -")
 
+    # Test mismatch flagging
+    print("\rTesting mismatch flagging...", end="")
+    flagged_alignment = flag_mismatches(alignment)
+
+    # Print flagged alignment results
+    print("\rMismatch flagging tested successfully:")
+    print(f"  - Number of flagged items: {len(flagged_alignment)}")
+    print("  - First flagged items:")
+    for item in flagged_alignment:
+        print(f"    - {item}")
+    print()
+
+    # Test confidence calculation
+    print("\rTesting confidence calculation...", end="")
+    confidence = calculate_confidence(flagged_alignment)
+
+    # Print confidence score
+    print("\rConfidence calculated successfully:")
+    print(f"  - Confidence: {confidence:.2f}")
+    print()
+
+    # Test adding alignment tiers to ELAN
+    print("\rTesting ELAN alignment export...", end="")
+
+    # Add the alignment to the existing ELAN tiers
+    eaf = add_alignment(eaf, flagged_alignment, OUTPUT_TIERS)
+
+    # Print ELAN export info
+    print("\rELAN alignment export tested successfully:")
+    print(f"  - Word tier: {OUTPUT_TIERS['words']}")
+    print(f"  - Spoken tone tier: {OUTPUT_TIERS['spoken_tones']}")
+    print(f"  - Surrogate tone tier: {OUTPUT_TIERS['surrogate_tones']}")
+    print()
+
+    # Test saving the modified ELAN file
+    print("\rTesting ELAN save...", end="")
+
+    # Save the modified ELAN file
+    save_elan(eaf, ELAN_OUTPUT_PATH)
+
+    # Print save location
+    print("\rELAN save tested successfully:")
+    print(f"  - Saved to: {ELAN_OUTPUT_PATH}")
+    print()
 
     print("\nTesting complete.")
 

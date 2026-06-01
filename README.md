@@ -72,10 +72,13 @@ The program produces:
 ```text
 surrogate-music-tone-aligner/
 ├── data/
-│   ├── sample.wav
-│   └── sample.eaf
+│   ├── sample1.wav
+│   ├── sample1.eaf
+│   ├── sample2.wav
+│   ├── sample2.eaf
+│   ├── sample3.wav
+│   └── sample3.eaf
 ├── outputs/
-│   ├── alignment.TextGrid
 │   └── aligned_output.eaf
 ├── screenshots/
 ├── .gitignore
