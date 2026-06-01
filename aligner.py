@@ -7,10 +7,10 @@ import parselmouth
 
 # Constants
 
-SAMPLE = "2"
-AUDIO_PATH = Path(f"data/sample{SAMPLE}.wav")
+INPUT = "sample1"
+AUDIO_PATH = Path(f"data/{INPUT}.wav")
 INPUT_TIER = "Surrogate_Transcription-txt-gbe"
-ELAN_INPUT_PATH = Path(f"data/sample{SAMPLE}.eaf")
+ELAN_INPUT_PATH = Path(f"data/{INPUT}.eaf")
 
 OUTPUT_DIR = Path("outputs")
 OUTPUT_TIERS = {
@@ -897,15 +897,41 @@ def group_alignment(alignment):
     # Loop through each tone-level alignment item
     for item in alignment:
 
-        # Skip items with no spoken word
+        # If this is an extra surrogate note with no spoken tone, attach it to the previous word group instead of skipping it
         if item["spoken"] is None:
+
+            # Only attach it if a word group already exists
+            if current_group is not None:
+
+                # Add this surrogate-only item to the current group
+                current_group["items"].append(item)
+
+                # Add the extra surrogate tone
+                if item["surrogate_tone"] is not None:
+                    current_group["surrogate_tones"].append(item["surrogate_tone"])
+
+                # Extend the group timing to include this extra note
+                if item["start"] is not None:
+                    if current_group["start"] is None:
+                        current_group["start"] = item["start"]
+                    else:
+                        current_group["start"] = min(current_group["start"], item["start"])
+
+                if item["end"] is not None:
+                    if current_group["end"] is None:
+                        current_group["end"] = item["end"]
+                    else:
+                        current_group["end"] = max(current_group["end"], item["end"])
+
+            # Move to next item
             continue
 
         # Get the word index for this tone
+        segment_index = item.get("segment_index")
         word_index = item["spoken"]["word_index"]
 
         # Start a new group when we see a new word
-        if current_group is None or current_group["word_index"] != word_index:
+        if current_group is None or current_group["word_index"] != word_index or current_group["segment_index"] != segment_index:
 
             # Save the old group before starting a new one
             if current_group is not None:
@@ -913,6 +939,7 @@ def group_alignment(alignment):
 
             # Create a new word-level group
             current_group = {
+                "segment_index": segment_index,
                 "word_index": word_index,
                 "word": item["spoken"]["word"],
                 "spoken_tones": [],
@@ -954,14 +981,44 @@ def group_alignment(alignment):
     # Add joined tone-pattern strings
     for group in grouped_alignment:
 
-        # Join spoken tones into one word-level pattern
-        group["spoken_tone_pattern"] = "-".join(group["spoken_tones"])
+        # If there are spoken tones, join them into one pattern
+        if len(group["spoken_tones"]) > 0:
+            group["spoken_tone_pattern"] = "-".join(group["spoken_tones"])
+        
+        # Otherwise, use an empty string
+        else:
+            group["spoken_tone_pattern"] = ""
 
-        # Join surrogate tones into one word-level pattern
-        group["surrogate_tone_pattern"] = "-".join(group["surrogate_tones"])
+        # If there are surrogate tones, join them into one pattern
+        if len(group["surrogate_tones"]) > 0:
+            group["surrogate_tone_pattern"] = "-".join(group["surrogate_tones"])
+        
+        # Otherwise, use an empty string
+        else:
+            group["surrogate_tone_pattern"] = ""
 
     # Return word-level grouped alignment
     return grouped_alignment
+
+
+# Function:     clear_tier
+# Inputs:       eaf | loaded ELAN file object
+#               tier_name | name of ELAN tier to be cleared (str)
+# Outputs:      eaf | modified ELAN file object
+# Description:  Clears annotations on a tier of an ELAN file.
+
+def clear_tier(eaf, tier_name):
+    # Get all existing annotations from this tier
+    annotations = eaf.get_annotation_data_for_tier(tier_name)
+
+    # Loop through existing annotations
+    for start_ms, end_ms, value in annotations:
+
+        # Remove this annotation from the tier
+        eaf.remove_annotation(tier_name, start_ms)
+
+    # Return modified ELAN object
+    return eaf
 
 
 # Function:     add_alignment
@@ -979,6 +1036,19 @@ def add_alignment(eaf, alignment, tier_names):
     word_tier = tier_names["words"]
     spoken_tone_tier = tier_names["spoken_tones"]
     surrogate_tone_tier = tier_names["surrogate_tones"]
+
+    # Add the tiers if they don't already exist
+    if word_tier not in eaf.get_tier_names():
+        eaf.add_tier(word_tier)
+    if spoken_tone_tier not in eaf.get_tier_names():
+        eaf.add_tier(spoken_tone_tier)
+    if surrogate_tone_tier not in eaf.get_tier_names():
+        eaf.add_tier(surrogate_tone_tier)
+
+    # Clear existing annotations
+    clear_tier(eaf, word_tier)
+    clear_tier(eaf, spoken_tone_tier)
+    clear_tier(eaf, surrogate_tone_tier)
 
     # Loop through each word-level group
     for group in grouped_alignment:
@@ -1079,13 +1149,113 @@ def flag_mismatches(alignment):
 
 
 # Function:     run_pipeline
-# Inputs:       config | configuration object containing file paths, tier names, and settings
-# Outputs:      alignment | final alignment between Kinande words and surrogate notes (list)
+# Inputs:       config | dictionary containing file paths, tier names, and settings (dict)
+# Outputs:      full_alignment | final alignment between Kinande words and surrogate notes (list)
 #               confidence | confidence score for the final alignment (float)
 # Description:  Runs the full alignment workflow from input loading to output file creation.
 
 def run_pipeline(config):
-    return # alignment, confidence
+    # Make sure output folder exists
+    config["output_dir"].mkdir(exist_ok=True)
+
+    # Load audio
+    print("Loading audio...")
+    y, sr, d = load_audio(config["audio_path"])
+
+    # Load ELAN file
+    print("Loading ELAN file...")
+    eaf = load_elan(config["elan_input_path"])
+
+    # Get phrase/drumming segments from the input tier
+    print("Getting ELAN segments...")
+    segments = get_elan_segments(eaf, config["input_tier"])
+
+    # Create one big alignment list for all segments
+    full_alignment = []
+
+    # Process each annotated phrase/drumming segment
+    print("Processing segments...")
+    for i, segment in enumerate(segments):
+
+        # Get segment times
+        start_time = segment["start"]
+        end_time = segment["end"]
+
+        # Get Kinande phrase from ELAN label
+        phrase = segment["label"]
+
+        # Print progress
+        print(f"  - {i + 1}/{len(segments)}:")
+        print(f"    - Phrase: {phrase}")
+        print(f"    - Time: {start_time:.2f}–{end_time:.2f}")
+
+        # Extract this audio segment
+        y_segment = extract_audio_segment(y, sr, start_time, end_time)
+
+        # Detect note onsets
+        onset_times = detect_note_onsets(y_segment, sr)
+
+        # Convert onsets into note intervals
+        intervals = make_note_intervals(onset_times, start_time, end_time)
+
+        # Extract pitch features
+        pitch_features = extract_pitch(y_segment, sr, intervals, start_time)
+
+        # Extract shape features
+        shape_features = extract_shape(y_segment, sr, intervals, start_time)
+
+        # Classify surrogate notes as H/L
+        surrogate_tones = classify_pitches(pitch_features, shape_features)
+
+        # Tokenize Kinande phrase into words
+        words = tokenize_phrase(phrase)
+
+        # Parse Kinande phrase into word-level tone patterns
+        tones = parse_tones(phrase)
+
+        # Check that each word has a tone pattern
+        is_valid = validate_melodies(words, tones)
+
+        # Skip this segment if the word/tone parsing failed
+        if not is_valid:
+            print("  - Skipping segment because word/tone counts do not match.")
+            continue
+
+        # Build structured word sequence
+        word_sequence = make_word_sequence(words, tones)
+
+        # Build structured surrogate sequence
+        surrogate_sequence = make_surrogate_sequence(intervals, surrogate_tones)
+
+        # Align spoken tones to surrogate tones
+        alignment = align_sequences(word_sequence, surrogate_sequence)
+
+        # Flag matches, mismatches, and gaps
+        flagged_alignment = flag_mismatches(alignment)
+
+        # Add segment information so words from different segments don't group together
+        for item in flagged_alignment:
+            item["segment_index"] = i
+            item["segment_start"] = start_time
+            item["segment_end"] = end_time
+            item["phrase"] = phrase
+
+        # Add this segment's alignment to the full alignment
+        full_alignment.extend(flagged_alignment)
+
+    # Calculate confidence across all aligned segments
+    confidence = calculate_confidence(full_alignment)
+
+    # Add alignment tiers to ELAN
+    print("Adding alignment to ELAN...")
+    eaf = add_alignment(eaf, full_alignment, config["output_tiers"])
+
+    # Save modified ELAN file
+    print("Saving ELAN file...")
+    save_elan(eaf, config["elan_output_path"])
+
+    # Return final alignment and confidence
+    return full_alignment, confidence
 
 
 # Function:     main
@@ -1094,247 +1264,28 @@ def run_pipeline(config):
 # Description:  Main project pipeline.
 
 def main():
-    print("=== Basic Input Functions Test ===\n")
+    # Print project header
+    print("=== SURROGATE LANGUAGE ALIGNER ===\n")
 
-    # Make sure the outputs folder exists
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    # Store pipeline settings in one config dictionary
+    config = {
+        "audio_path": AUDIO_PATH,
+        "elan_input_path": ELAN_INPUT_PATH,
+        "input_tier": INPUT_TIER,
+        "output_dir": OUTPUT_DIR,
+        "output_tiers": OUTPUT_TIERS,
+        "elan_output_path": ELAN_OUTPUT_PATH
+    }
 
-    # Load the audio file
-    print("\rLoading audio...", end="")
-    y, sr, d = load_audio(AUDIO_PATH)
+    # Run the full pipeline
+    alignment, confidence = run_pipeline(config)
 
-    # Print basic audio information
-    print("\rAudio loaded successfully:")
-    print(f"  - Audio path: {AUDIO_PATH}")
-    print(f"  - Sample rate: {sr} Hz")
-    print(f"  - Duration: {d:.2f} seconds")
-    print()
-
-    # Load the ELAN file
-    print("\rLoading ELAN file...", end="")
-    eaf = load_elan(ELAN_INPUT_PATH)
-
-    # Print basic ELAN information
-    print("\rELAN file loaded successfully:")
-    print(f"  - ELAN path: {ELAN_INPUT_PATH}")
-    print()
-
-    # Get segments from one ELAN tier
-    print("\rGetting ELAN segments...", end="")
-    segments = get_elan_segments(eaf, INPUT_TIER)
-
-    # Print how many segments were found
-    print(f"\rFound {len(segments)} segments in tier: {INPUT_TIER}")
-
-    # Print the first few segments for checking
-    print("\nFirst few segments:")
-    for segment in segments[:5]:
-        print(f"  - {segment}")
-    print()
-
-    # Choose a test segment from the ELAN file
-    if len(segments) > 0:
-
-        # Use the first segment as a test
-        start_time = segments[0]["start"]
-        end_time = segments[0]["end"]
-
-        # Extract that part of the audio
-        print("\rExtracting first audio segment...", end="")
-        y_segment = extract_audio_segment(y, sr, start_time, end_time)
-
-        # Get segment duration
-        segment_duration = librosa.get_duration(y=y_segment, sr=sr)
-
-        # Print segment info
-        print("\rAudio segment extracted successfully:")
-        print(f"  - Start time: {start_time:.2f} seconds")
-        print(f"  - End time: {end_time:.2f} seconds")
-        print(f"  - Segment duration: {segment_duration:.2f} seconds")
-        print(f"  - Segment samples: {len(y_segment)}")
-
-    else:
-
-        # Tell the user if there were no annotations
-        print("No segments found, so no audio segment was extracted.")
-
-    print()
-
-    # Detect note onsets in the extracted segment
-    print("\rDetecting note onsets...", end="")
-    onset_times = detect_note_onsets(y_segment, sr)
-
-    # Print detected onset information
-    print("\rNote onsets detected successfully:")
-    print(f"  - Number of onsets: {len(onset_times)}")
-    print(f"  - First few onsets: {onset_times[:10]}")
-    print()
-
-    # Convert note onsets into note intervals
-    print("\rMaking note intervals...", end="")
-    intervals = make_note_intervals(onset_times, start_time, end_time)
-
-    # Print interval information
-    print("\rNote intervals created successfully:")
-    print(f"  - Number of intervals: {len(intervals)}")
-    print(f"  - First few intervals:")
-    for interval in intervals[:10]:
-        print(f"    - {interval}")
-    print()
-
-    # Extract pitch features for each note interval
-    print("\rExtracting pitch features...", end="")
-    pitch_features = extract_pitch(y_segment, sr, intervals, start_time)
-
-    # Print pitch feature information
-    print("\rPitch features extracted successfully:")
-    print(f"  - Number of pitch features: {len(pitch_features)}")
-    print(f"  - First few pitch features: {pitch_features[:10]}")
-    print()
-
-    # Extract shape features for each note interval
-    print("\rExtracting shape features...", end="")
-    shape_features = extract_shape(y_segment, sr, intervals, start_time)
-
-    # Classify each pitch feature as H or L
-    print("\rClassifying pitches...", end="")
-    surrogate_tones = classify_pitches(pitch_features, shape_features)
-
-    # Print classified H/L tone information
-    print("\rPitches classified successfully:")
-    print(f"  - Number of surrogate tones: {len(surrogate_tones)}")
-    print(f"  - First few surrogate tones: {surrogate_tones[:20]}")
-
-    # Print features with labels
-    for feature, tone in zip(pitch_features, surrogate_tones):
-        print(f"{feature:.3f} -> {tone}")
-    
-    # Print accuracy
-    if SAMPLE == "1":
-        correct_tones = ['L', 'L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L']
-    if SAMPLE == "2":
-        correct_tones = ['L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L', 'H', 'H', 'H', 'H', 'H']
-    if SAMPLE == "3":
-        correct_tones = ['L', 'L', 'L', 'L', 'H', 'L', 'H', 'L', 'L', 'L', 'L']
-    print(f"\nCorrect surrogate tones: {correct_tones}")
-    print(f"\nOutput:                  {surrogate_tones}")
-    correct = 0
-    for i in range(len(correct_tones)):
-        if correct_tones[i] == surrogate_tones[i]:
-            correct += 1
-    print(f"\nAccuracy: {correct/len(correct_tones):.2f}")
-    print()
-
-    # Test phrase tokenization and tone parsing
-    print("\rTesting phrase and tone parsing...", end="")
-
-    # Use a small test phrase with tone markings
-    if SAMPLE == "1":
-        test_phrase = "Lebay’ ebitú, yikátak’ eriwȃ"
-    if SAMPLE == "2":
-        test_phrase = "Ehinyunyú hinámuhuluka okómítí koko kitwá kiryȃ"
-    if SAMPLE == "3":
-        test_phrase = "Lebay’ ebitú, yikátak’ eriwȃ"
-
-    # Split the phrase into word tokens
-    words = tokenize_phrase(test_phrase)
-
-    # Parse the tone pattern from the phrase
-    tones = parse_tones(test_phrase)
-
-    # Check that each word has one tone pattern
-    is_valid = validate_melodies(words, tones)
-
-    # Print parsing results
-    print("\rPhrase and tone parsing tested successfully:")
-    print(f"  - Phrase: {test_phrase}")
-    print(f"  - Words: {words}")
-    print(f"  - Tones: {tones}")
-    print(f"  - Valid: {is_valid}")
-    print()
-
-    # Make the structured Kinande word sequence
-    print("\rMaking word sequence...", end="")
-    word_sequence = make_word_sequence(words, tones)
-
-    # Print word sequence
-    print("\rWord sequence created successfully:")
-    for word_data in word_sequence:
-        print(f"  - {word_data}")
-    print()
-
-    # Make the structured surrogate note sequence
-    print("\rMaking surrogate sequence...", end="")
-    surrogate_sequence = make_surrogate_sequence(intervals, surrogate_tones)
-
-    # Print surrogate sequence
-    print("\rSurrogate sequence created successfully:")
-    print(f"  - Number of surrogate notes: {len(surrogate_sequence)}")
-    print(f"  - Surrogate notes:")
-    for note_data in surrogate_sequence:
-        print(f"    - {note_data}")
-    print()
-
-    # Test sequence alignment
-    print("\rTesting sequence alignment...", end="")
-    alignment = align_sequences(word_sequence, surrogate_sequence)
-
-    # Print alignment results
-    print("\rSequence alignment tested successfully:")
-    print(f"  - Number of aligned items: {len(alignment)}")
-    print("  - Aligned items:")
-    for item in alignment:
-        try:
-            print(f"    - {item["spoken"]["word"]}: {item["surrogate"]["tone"]}")
-        except TypeError:
-            print(f"    - {item["spoken"]["word"]}: -")
-
-    # Test mismatch flagging
-    print("\rTesting mismatch flagging...", end="")
-    flagged_alignment = flag_mismatches(alignment)
-
-    # Print flagged alignment results
-    print("\rMismatch flagging tested successfully:")
-    print(f"  - Number of flagged items: {len(flagged_alignment)}")
-    print("  - First flagged items:")
-    for item in flagged_alignment:
-        print(f"    - {item}")
-    print()
-
-    # Test confidence calculation
-    print("\rTesting confidence calculation...", end="")
-    confidence = calculate_confidence(flagged_alignment)
-
-    # Print confidence score
-    print("\rConfidence calculated successfully:")
+    # Print final summary
+    print("\n=== Processing Complete ===")
+    print(f"  - Aligned items: {len(alignment)}")
     print(f"  - Confidence: {confidence:.2f}")
+    print(f"  - ELAN saved to: {config['elan_output_path']}")
     print()
-
-    # Test adding alignment tiers to ELAN
-    print("\rTesting ELAN alignment export...", end="")
-
-    # Add the alignment to the existing ELAN tiers
-    eaf = add_alignment(eaf, flagged_alignment, OUTPUT_TIERS)
-
-    # Print ELAN export info
-    print("\rELAN alignment export tested successfully:")
-    print(f"  - Word tier: {OUTPUT_TIERS['words']}")
-    print(f"  - Spoken tone tier: {OUTPUT_TIERS['spoken_tones']}")
-    print(f"  - Surrogate tone tier: {OUTPUT_TIERS['surrogate_tones']}")
-    print()
-
-    # Test saving the modified ELAN file
-    print("\rTesting ELAN save...", end="")
-
-    # Save the modified ELAN file
-    save_elan(eaf, ELAN_OUTPUT_PATH)
-
-    # Print save location
-    print("\rELAN save tested successfully:")
-    print(f"  - Saved to: {ELAN_OUTPUT_PATH}")
-    print()
-
-    print("\nTesting complete.")
 
 
 if __name__ == "__main__":
