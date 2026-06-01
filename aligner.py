@@ -7,8 +7,8 @@ import parselmouth
 
 # Constants
 
-AUDIO_PATH = Path(f"data/sample.wav")
-ELAN_PATH = Path(f"data/sample.eaf")
+AUDIO_PATH = Path(f"data/sample2.wav")
+ELAN_PATH = Path(f"data/sample2.eaf")
 
 OUTPUT_DIR = Path("outputs")
 
@@ -689,7 +689,20 @@ def group_tones_by_word(word_sequence, surrogate_sequence):
 # Description:  Scores a tone match, mismatch, or gap during sequence alignment.
 
 def score_alignment(spoken_tone, surrogate_tone):
-    return # score
+    # If either tone is missing, treat it as a gap
+    if spoken_tone is None or surrogate_tone is None:
+        score = -2
+
+    # Give a positive score for an exact tone match
+    elif spoken_tone == surrogate_tone:
+        score = 2
+
+    # Give a smaller penalty for a mismatch
+    else:
+        score = -1
+
+    # Return the alignment score
+    return score
 
 
 # Function:     align_sequences
@@ -699,7 +712,178 @@ def score_alignment(spoken_tone, surrogate_tone):
 # Description:  Aligns the Kinande tone sequence with the surrogate tone sequence using a scoring algorithm.
 
 def align_sequences(spoken_sequence, surrogate_sequence):
-    return # alignment
+
+    # Flatten the spoken word sequence into individual tone objects
+    spoken_tones = []
+    for word_data in spoken_sequence:
+
+        # Loop through each tone in this word
+        for tone_index, tone in enumerate(word_data["tones"]):
+
+            # Store the tone with its word information
+            spoken_tones.append({
+                "word_index": word_data["index"],
+                "word": word_data["word"],
+                "tone_index": tone_index,
+                "tone": tone
+            })
+
+    # Flatten the surrogate sequence into individual tone objects
+    surrogate_tones = []
+    for note_data in surrogate_sequence:
+
+        # Store the surrogate tone with its timing information
+        surrogate_tones.append({
+            "note_index": note_data["index"],
+            "start": note_data["start"],
+            "end": note_data["end"],
+            "tone": note_data["tone"]
+        })
+
+    # Get sequence lengths
+    n = len(spoken_tones)
+    m = len(surrogate_tones)
+
+    # Create score matrix
+    score_matrix = np.zeros((n + 1, m + 1))
+
+    # Create backpointer matrix
+    backpointer_matrix = [[None for _ in range(m + 1)] for _ in range(n + 1)]
+
+    # Fill first column with gap penalties
+    for i in range(1, n + 1):
+        score_matrix[i][0] = score_matrix[i - 1][0] + score_alignment(spoken_tones[i - 1]["tone"], None)
+        backpointer_matrix[i][0] = "up"
+
+    # Fill first row with gap penalties
+    for j in range(1, m + 1):
+        score_matrix[0][j] = score_matrix[0][j - 1] + score_alignment(None, surrogate_tones[j - 1]["tone"])
+        backpointer_matrix[0][j] = "left"
+
+    # Fill the rest of the matrix
+    for i in range(1, n + 1):
+
+        # Loop through surrogate tones
+        for j in range(1, m + 1):
+
+            # Score a spoken tone aligned to a surrogate tone
+            diagonal_score = score_matrix[i - 1][j - 1] + score_alignment(
+                spoken_tones[i - 1]["tone"],
+                surrogate_tones[j - 1]["tone"]
+            )
+
+            # Score a spoken tone aligned to a gap
+            up_score = score_matrix[i - 1][j] + score_alignment(
+                spoken_tones[i - 1]["tone"],
+                None
+            )
+
+            # Score a surrogate tone aligned to a gap
+            left_score = score_matrix[i][j - 1] + score_alignment(
+                None,
+                surrogate_tones[j - 1]["tone"]
+            )
+
+            # Choose the best score
+            best_score = max(diagonal_score, up_score, left_score)
+
+            # Store the best score
+            score_matrix[i][j] = best_score
+
+            # Store the direction that produced the best score
+            if best_score == diagonal_score:
+                backpointer_matrix[i][j] = "diagonal"
+            elif best_score == up_score:
+                backpointer_matrix[i][j] = "up"
+            else:
+                backpointer_matrix[i][j] = "left"
+
+    # Create an empty alignment list
+    alignment = []
+
+    # Start traceback from bottom-right corner
+    i = n
+    j = m
+
+    # Trace back until both sequences are exhausted
+    while i > 0 or j > 0:
+
+        # Get traceback direction
+        direction = backpointer_matrix[i][j]
+
+        # Match/mismatch case
+        if direction == "diagonal":
+
+            # Get current spoken tone
+            spoken = spoken_tones[i - 1]
+
+            # Get current surrogate tone
+            surrogate = surrogate_tones[j - 1]
+
+            # Add aligned pair
+            alignment.append({
+                "spoken": spoken,
+                "surrogate": surrogate,
+                "spoken_tone": spoken["tone"],
+                "surrogate_tone": surrogate["tone"],
+                "start": surrogate["start"],
+                "end": surrogate["end"],
+                "score": score_alignment(spoken["tone"], surrogate["tone"])
+            })
+
+            # Move diagonally
+            i -= 1
+            j -= 1
+
+        # Spoken tone aligned to gap
+        elif direction == "up":
+
+            # Get current spoken tone
+            spoken = spoken_tones[i - 1]
+
+            # Add gap alignment
+            alignment.append({
+                "spoken": spoken,
+                "surrogate": None,
+                "spoken_tone": spoken["tone"],
+                "surrogate_tone": None,
+                "start": None,
+                "end": None,
+                "score": score_alignment(spoken["tone"], None)
+            })
+
+            # Move up
+            i -= 1
+
+        # Surrogate tone aligned to gap
+        elif direction == "left":
+
+            # Get current surrogate tone
+            surrogate = surrogate_tones[j - 1]
+
+            # Add gap alignment
+            alignment.append({
+                "spoken": None,
+                "surrogate": surrogate,
+                "spoken_tone": None,
+                "surrogate_tone": surrogate["tone"],
+                "start": surrogate["start"],
+                "end": surrogate["end"],
+                "score": score_alignment(None, surrogate["tone"])
+            })
+
+            # Move left
+            j -= 1
+
+        # Safety fallback
+        else:
+            break
+
+    # Reverse alignment because traceback builds it backwards
+    alignment.reverse()
+
+    # Return the final alignment
+    return alignment
 
 
 # Function:     calculate_confidence
@@ -900,7 +1084,10 @@ def main():
     print("\rTesting phrase and tone parsing...", end="")
 
     # Use a small test phrase with tone markings
-    test_phrase = "Asá hano"
+    if AUDIO_PATH == Path(f"data/sample.wav"):
+        test_phrase = "Lebay’ ebitú, yikátak’ eriwȃ"
+    if AUDIO_PATH == Path(f"data/sample2.wav"):
+        test_phrase = "Ehinyunyú hinámuhuluka okómítí koko kitwá kiryȃ"
 
     # Split the phrase into word tokens
     words = tokenize_phrase(test_phrase)
@@ -950,6 +1137,21 @@ def main():
     for group in grouped_sequence:
         print(f"  - {group}")
     print()
+
+    # Test sequence alignment
+    print("\rTesting sequence alignment...", end="")
+    alignment = align_sequences(word_sequence, surrogate_sequence)
+
+    # Print alignment results
+    print("\rSequence alignment tested successfully:")
+    print(f"  - Number of aligned items: {len(alignment)}")
+    print("  - Aligned items:")
+    for item in alignment:
+        try:
+            print(f"    - {item["spoken"]["word"]}: {item["surrogate"]["tone"]}")
+        except TypeError:
+            print(f"    - {item["spoken"]["word"]}: -")
+
 
     print("\nTesting complete.")
 
