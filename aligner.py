@@ -897,35 +897,40 @@ def group_alignment(alignment):
     # Loop through each tone-level alignment item
     for item in alignment:
 
-        # If this is an extra surrogate note with no spoken tone, attach it to the previous word group instead of skipping it
+        # If this is an extra surrogate note with no spoken tone, output it as an insertion
         if item["spoken"] is None:
 
-            # Only attach it if a word group already exists
+            # Save the previous word group first
             if current_group is not None:
+                grouped_alignment.append(current_group)
+                current_group = None
 
-                # Do not attach surrogate-only notes from a different segment
-                if item.get("segment_index") != current_group["segment_index"]:
-                    continue
+            # Create an insertion group for the extra surrogate note
+            insertion_group = {
+                "segment_index": item.get("segment_index"),
+                "segment_start": item.get("segment_start"),
+                "segment_end": item.get("segment_end"),
+                "word_index": None,
+                "word": "",
+                "spoken_tones": [],
+                "surrogate_tones": [],
+                "start": item["start"],
+                "end": item["end"],
+                "items": [item]
+            }
 
-                # Add this surrogate-only item to the current group
-                current_group["items"].append(item)
+            # Add the surrogate tone if it exists
+            if item["surrogate_tone"] is not None:
+                insertion_group["surrogate_tones"].append(item["surrogate_tone"])
 
-                # Add the extra surrogate tone
-                if item["surrogate_tone"] is not None:
-                    current_group["surrogate_tones"].append(item["surrogate_tone"])
+            # Add empty spoken pattern
+            insertion_group["spoken_tone_pattern"] = ""
 
-                # Extend the group timing to include this extra note
-                if item["start"] is not None:
-                    if current_group["start"] is None:
-                        current_group["start"] = item["start"]
-                    else:
-                        current_group["start"] = min(current_group["start"], item["start"])
+            # Add surrogate pattern
+            insertion_group["surrogate_tone_pattern"] = "-".join(insertion_group["surrogate_tones"])
 
-                if item["end"] is not None:
-                    if current_group["end"] is None:
-                        current_group["end"] = item["end"]
-                    else:
-                        current_group["end"] = max(current_group["end"], item["end"])
+            # Add insertion group to output
+            grouped_alignment.append(insertion_group)
 
             # Move to next item
             continue
