@@ -7,7 +7,7 @@ import parselmouth
 
 # Constants
 
-INPUT = "sample1"
+INPUT = "input2"
 AUDIO_PATH = Path(f"data/{INPUT}.wav")
 INPUT_TIER = "Surrogate_Transcription-txt-gbe"
 ELAN_INPUT_PATH = Path(f"data/{INPUT}.eaf")
@@ -722,11 +722,22 @@ def align_sequences(spoken_sequence, surrogate_sequence):
                 None
             )
 
-            # Score a surrogate tone aligned to a gap
-            left_score = score_matrix[i][j - 1] + score_alignment(
-                None,
-                surrogate_tones[j - 1]["tone"]
-            )
+            # Check whether an extra surrogate note would be placed between words
+            if i == 0 or i == n:
+                at_word_boundary = True
+            else:
+                previous_word_index = spoken_tones[i - 1]["word_index"]
+                next_word_index = spoken_tones[i]["word_index"]
+                at_word_boundary = previous_word_index != next_word_index
+
+            # Only allow surrogate-only gaps between words
+            if at_word_boundary:
+                left_score = score_matrix[i][j - 1] + score_alignment(
+                    None,
+                    surrogate_tones[j - 1]["tone"]
+                )
+            else:
+                left_score = -999999
 
             # Choose the best score
             best_score = max(diagonal_score, up_score, left_score)
