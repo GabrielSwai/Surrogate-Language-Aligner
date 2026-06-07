@@ -1,3 +1,12 @@
+# =====================================================================================
+# LING48/COSC72 Final Project: Surrogate Language Aligner
+# Gabriel Swai (gabriel.a.swai.29@dartmouth.edu)
+# Last modification: 2026/06/07
+#
+# This project is a semi-automatic Python tool for aligning Kinande spoken tone
+# patterns with corresponding drummed musical surrogate patterns.
+# =====================================================================================
+
 from pathlib import Path
 import librosa
 import numpy as np
@@ -7,7 +16,7 @@ import parselmouth
 
 # Constants
 
-INPUT = "input2"
+INPUT = "sample3"
 AUDIO_PATH = Path(f"data/{INPUT}.wav")
 INPUT_TIER = "Surrogate_Transcription-txt-gbe"
 ELAN_INPUT_PATH = Path(f"data/{INPUT}.eaf")
