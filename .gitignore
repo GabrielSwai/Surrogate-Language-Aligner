@@ -4,5 +4,5 @@
 *.eaf.001
 *.pfsx
 .DS_Store
-input.wav
-input.eaf
+input*.wav
+inpu*.eaf

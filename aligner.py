@@ -903,6 +903,10 @@ def group_alignment(alignment):
             # Only attach it if a word group already exists
             if current_group is not None:
 
+                # Do not attach surrogate-only notes from a different segment
+                if item.get("segment_index") != current_group["segment_index"]:
+                    continue
+
                 # Add this surrogate-only item to the current group
                 current_group["items"].append(item)
 
@@ -940,6 +944,8 @@ def group_alignment(alignment):
             # Create a new word-level group
             current_group = {
                 "segment_index": segment_index,
+                "segment_start": item.get("segment_start"),
+                "segment_end": item.get("segment_end"),
                 "word_index": word_index,
                 "word": item["spoken"]["word"],
                 "spoken_tones": [],
@@ -1057,11 +1063,27 @@ def add_alignment(eaf, alignment, tier_names):
         if group["start"] is None or group["end"] is None:
             continue
 
-        # Convert start time from seconds to milliseconds
-        start_ms = int(group["start"] * 1000)
+        # Keep output annotations inside the original input annotation
+        segment_start = group.get("segment_start")
+        segment_end = group.get("segment_end")
 
-        # Convert end time from seconds to milliseconds
-        end_ms = int(group["end"] * 1000)
+        # Clamp start/end to the segment boundaries
+        start = group["start"]
+        end = group["end"]
+
+        if segment_start is not None:
+            start = max(start, segment_start)
+
+        if segment_end is not None:
+            end = min(end, segment_end)
+
+        # Skip invalid intervals after clamping
+        if end <= start:
+            continue
+
+        # Convert start/end from seconds to milliseconds
+        start_ms = int(round(start * 1000))
+        end_ms = int(round(end * 1000))
 
         # Get word text
         word = group["word"]
