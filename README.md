@@ -20,11 +20,10 @@ The current version focuses on:
 - Detecting individual surrogate note onsets
 - Classifying detected notes as high or low
 - Tokenizing the Kinande phrase into word-level units
-- Parsing word-level tone patterns (e.g. `L-H L-L`)
+- Parsing word-level tone patterns (e.g. `Talindá háke` → `L-L-H H-L`)
 - Aligning the Kinande tone patterns with the detected surrogate tones
 - Flagging mismatches between spoken and surrogate tone patterns
-- Exporting the alignment to a Praat TextGrid
-- Adding the alignment to ELAN
+- Adding the alignment back to ELAN
 
 ## ❌ What This Project Does Not Do
 
@@ -44,7 +43,7 @@ The program expects:
 - A `.wav` file containing the drummed musical surrogate recording
 - An `.eaf` ELAN file containing manual annotations
 - A manually selected start and end time for the relevant drumming segment
-- A Kinande phrase, tokenized by spaces
+- A Kinande phrase
 
 Example phrase input:
 
@@ -62,10 +61,8 @@ hano! → L-L
 ## 📤 Outputs
 
 The program produces:
-
-- A Praat TextGrid containing the aligned Kinande words, tone patterns, and surrogate note intervals
 - An updated ELAN `.eaf` file with the alignment added to a specified tier
-- Mismatch/confidence information for checking the quality of the alignment
+- Confidence information for checking the quality of the alignment
 
 ## 📁 Folder Structure
 
@@ -80,7 +77,6 @@ surrogate-music-tone-aligner/
 │   └── sample3.eaf
 ├── outputs/
 │   └── aligned_output.eaf
-├── screenshots/
 ├── .gitignore
 ├── aligner.py
 ├── LICENSE
