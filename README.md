@@ -78,8 +78,8 @@ surrogate-music-tone-aligner/
 ├── outputs/
 │   └── aligned_output.eaf
 ├── .gitignore
-├── aligner.py
 ├── LICENSE
 ├── README.md
+├── aligner.py
 └── requirements.txt
 ```
