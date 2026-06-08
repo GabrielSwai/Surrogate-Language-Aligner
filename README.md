@@ -36,6 +36,39 @@ To keep the project focused and realistic, the current version does **not** atte
 
 Those steps are assumed to be completed manually before running the tool. In the future, I plan on implementing more of the above for a higher level of automation, as well as expand the program for a wider variety of instruments and languages.
 
+## ▶️ Running the Aligner
+
+The main code for this project is in `aligner.py`. Before running it, create a virtual environment, activate it, and install the required dependencies from `requirements.txt`.
+
+### macOS/Linux
+
+~~~bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python aligner.py
+~~~
+
+### Windows
+
+Using Command Prompt:
+
+~~~bash
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+python aligner.py
+~~~
+
+Using PowerShell:
+
+~~~bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python aligner.py
+~~~
+
 ## 📥 Inputs
 
 The program expects:
